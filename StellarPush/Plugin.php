@@ -1,6 +1,6 @@
 <?php
 
-namespace TypechoPlugin\BaiduPush;
+namespace TypechoPlugin\StellarPush;
 
 use Typecho\Plugin\PluginInterface;
 use Typecho\Widget\Helper\Form;
@@ -10,13 +10,13 @@ if (!defined('__TYPECHO_ROOT_DIR__')) {
 }
 
 /**
- * BaiduPush —— 百度普通收录主动推送插件
- * 自动收集全站已发布内容 URL，主动推送给百度加速收录。
- * 支持：定时自动推送 / 手动全量 / 增量 / 失败重试 / 历史日志 / 干跑模式。
+ * StellarPush —— 多引擎搜索引擎推送插件
+ * 自动收集全站已发布内容 URL，主动推送给百度 / Bing(IndexNow) 等多引擎加速收录。
+ * 支持：定时自动推送 / 手动全量 / 增量 / 失败重试 / 历史日志 / 干跑模式 / 多引擎可视化。
  *
- * @package BaiduPush
+ * @package StellarPush
  * @author 咔咔
- * @version 1.0.0
+ * @version 2.0.0
  */
 class Plugin implements PluginInterface
 {
@@ -31,6 +31,14 @@ class Plugin implements PluginInterface
                 self::setState('internal_key', md5(uniqid('bp', true)));
             }
         }
+        /* 首次激活自动生成 IndexNow 密钥（Bing/Yandex 等多引擎推送，零配置） */
+        if (self::state('indexnow_key', '') === '') {
+            try {
+                self::setState('indexnow_key', bin2hex(random_bytes(16)));
+            } catch (\Throwable $e) {
+                self::setState('indexnow_key', md5(uniqid('idx', true)));
+            }
+        }
         /* 前台渲染钩子：触发每日定时自动推送 */
         \Typecho\Plugin::factory('Widget_Archive')->beforeRender = __CLASS__ . '::onRender';
         /* 发布/更新钩子：新文章发布即实时推送（fire-and-forget） */
@@ -39,7 +47,7 @@ class Plugin implements PluginInterface
         /* 后台顶栏入口按钮 */
         \Typecho\Plugin::factory('admin/header.php')->header = __CLASS__ . '::adminHeader';
         \Typecho\Plugin::factory('admin/footer.php')->end = __CLASS__ . '::adminFooter';
-        return 'BaiduPush 已启用：后台顶栏出现「百度推送」入口；新文章发布即推送，每日定时自动推送';
+        return 'StellarPush 已启用：多引擎推送（百度/IndexNow），后台顶栏出现「推送」入口；新文章发布即推送';
     }
 
     public static function deactivate()
@@ -58,7 +66,7 @@ class Plugin implements PluginInterface
         foreach ($_COOKIE as $k => $v) {
             if (substr($k, -13) === '__typecho_uid') {
                 $siteUrl = rtrim(\Typecho\Widget::widget('Widget_Options')->siteUrl, '/');
-                $panelUrl = $siteUrl . '/usr/plugins/BaiduPush/panel.php';
+                $panelUrl = $siteUrl . '/usr/plugins/StellarPush/panel.php';
         $js = <<<JS
 <script>
 (function () {
@@ -66,11 +74,13 @@ class Plugin implements PluginInterface
     var btn = document.createElement('a');
     btn.id = 'bp-top-btn';
     btn.href = '{$panelUrl}';
-    btn.title = '百度推送';
+    btn.title = '搜索引擎推送';
     btn.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;background:linear-gradient(135deg,#5b5bd6,#8b5cf6);color:#fff;font-size:13px;font-weight:600;text-decoration:none;margin-right:8px;';
-    btn.innerHTML = '🔗 百度推送';
+    btn.innerHTML = '🚀 推送';
     var bar = document.querySelector('.sa-topbar-right') || document.querySelector('.typecho-list-table') || document.body;
     bar.insertBefore(btn, bar.firstChild);
+    /* 覆盖 Typecho common-js 的 target="_blank"，当前标签页打开（同 AI 大屏） */
+    setTimeout(function () { var x = document.getElementById('bp-top-btn'); if (x) x.removeAttribute('target'); }, 100);
 })();
 </script>
 JS;
@@ -93,18 +103,23 @@ JS;
                 $db->query("CREATE TABLE IF NOT EXISTS {$logTable} (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     url TEXT, status TEXT DEFAULT 'success', message TEXT,
-                    created INTEGER)");
+                    engine VARCHAR(20) DEFAULT 'baidu', created INTEGER)");
                 $db->query("CREATE INDEX IF NOT EXISTS {$logTable}_created ON {$logTable} (created)");
             } else {
                 $db->query("CREATE TABLE IF NOT EXISTS {$logTable} (
                     id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
                     url TEXT, status VARCHAR(20) DEFAULT 'success', message TEXT,
-                    created INT)");
+                    engine VARCHAR(20) DEFAULT 'baidu', created INT)");
                 try {
                     $db->query("CREATE INDEX {$logTable}_created ON {$logTable} (created)");
                 } catch (\Throwable $e) {
                     /* 索引已存在 */
                 }
+            }
+            /* 兼容旧表：补齐 engine 列（已存在则报错忽略） */
+            try {
+                $db->query("ALTER TABLE {$logTable} ADD COLUMN engine VARCHAR(20) DEFAULT 'baidu'");
+            } catch (\Throwable $e) {
             }
 
             $stateTable = $prefix . 'baidu_push_state';
@@ -170,7 +185,7 @@ JS;
     public static function opt($key, $default = '')
     {
         try {
-            $cfg = \Typecho\Widget::widget('Widget_Options')->plugin('BaiduPush');
+            $cfg = \Typecho\Widget::widget('Widget_Options')->plugin('StellarPush');
         } catch (\Throwable $e) {
             return $default;
         }
@@ -279,7 +294,7 @@ JS;
             return;
         }
         $siteUrl = rtrim(\Typecho\Widget::widget('Widget_Options')->siteUrl, '/');
-        $url = $siteUrl . '/usr/plugins/BaiduPush/push.php?mode=single&cid=' . $cid . '&key=' . urlencode(self::internalKey());
+        $url = $siteUrl . '/usr/plugins/StellarPush/push.php?mode=single&cid=' . $cid . '&key=' . urlencode(self::internalKey());
         $parts = parse_url($url);
         $host = $parts['host'] ?? '127.0.0.1';
         $port = (int) ($parts['port'] ?? 0);
@@ -371,13 +386,13 @@ JS;
         }
     }
 
-    /* 记录一条推送日志 */
-    public static function log($url, $status, $message = '')
+    /* 记录一条推送日志（engine: baidu / indexnow / 360 / toutiao） */
+    public static function log($url, $status, $message = '', $engine = 'baidu')
     {
         try {
             $db = \Typecho\Db::get();
             $db->query($db->insert('table.baidu_push_log')->rows([
-                'url' => $url, 'status' => $status, 'message' => $message, 'created' => time(),
+                'url' => $url, 'status' => $status, 'message' => $message, 'engine' => $engine, 'created' => time(),
             ]));
         } catch (\Throwable $e) {
         }
@@ -581,6 +596,11 @@ JS;
             self::setState('pushed_urls', json_encode($pushedSet));
         }
 
+        /* 同步推送给 IndexNow（Bing/Yandex 等多引擎） */
+        if (!empty($successUrls)) {
+            self::indexNow($successUrls);
+        }
+
         /* 记录剩余配额（面板配额预警用） */
         try {
             self::setState('last_remain', (string) $remain);
@@ -658,6 +678,64 @@ JS;
         return false;
     }
 
+    /* IndexNow 多引擎推送（Bing/Yandex/Naver/Seznam 等，零配置自动启用） */
+    public static function indexNow($urls)
+    {
+        $urls = array_values(array_unique((array) $urls));
+        if (empty($urls)) {
+            return 0;
+        }
+        $site = rtrim(trim(self::opt('bp_site', '')), '/');
+        $host = parse_url($site, PHP_URL_HOST);
+        if (!$host) {
+            return 0;
+        }
+        $key = self::state('indexnow_key', '');
+        if ($key === '') {
+            /* 惰性生成密钥（首次推送时自动生成，无需重新激活插件） */
+            try {
+                $key = bin2hex(random_bytes(16));
+            } catch (\Throwable $e) {
+                $key = md5(uniqid('idx', true));
+            }
+            self::setState('indexnow_key', $key);
+        }
+        /* 托管密钥验证文件：{key}.txt 放到站点根目录 */
+        $keyFile = __TYPECHO_ROOT_DIR__ . '/' . $key . '.txt';
+        if (!is_file($keyFile)) {
+            @file_put_contents($keyFile, $key);
+        }
+        $body = json_encode([
+            'host' => $host,
+            'key' => $key,
+            'keyLocation' => $site . '/' . $key . '.txt',
+            'urlList' => array_slice($urls, 0, 10000),
+        ]);
+        $ch = curl_init('https://api.indexnow.org/indexnow');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => $body,
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json; charset=utf-8'],
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_CONNECTTIMEOUT => 8,
+            /* Windows PHP 未配 cacert.pem 会导致 https 证书验证失败，跳过验证 */
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+        ]);
+        $resp = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        /* 200 / 202 都表示已接收；记录成功日志（engine=indexnow） */
+        if ($code == 200 || $code == 202) {
+            foreach ($urls as $u) {
+                self::log($u, 'success', '', 'indexnow');
+            }
+            return count($urls);
+        }
+        return 0;
+    }
+
     /* ================= 新增功能 ================= */
 
     /* 连通性自检：提交站点首页探测 token/网络/配额 */
@@ -708,24 +786,55 @@ JS;
             $db = \Typecho\Db::get();
             $table = 'table.baidu_push_log';
             $todayStart = strtotime('today');
-
-            $today = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('created >= ?', $todayStart));
-            $todaySuccess = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('created >= ? AND status = ?', $todayStart, 'success'));
-            $todayFailed = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('created >= ? AND status = ?', $todayStart, 'failed'));
-            $total = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table));
-            $totalSuccess = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('status = ?', 'success'));
-            $failedRows = $db->fetchAll($db->select('url', 'message', 'created')->from($table)->where('status = ?', 'failed')->order('id', \Typecho\Db::SORT_DESC)->limit(50));
+            $engines = ['baidu', 'indexnow'];
+            $byEngine = [];
+            foreach ($engines as $e) {
+                $t = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('engine = ? AND created >= ?', $e, $todayStart));
+                $ts = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('engine = ? AND created >= ? AND status = ?', $e, $todayStart, 'success'));
+                $tf = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('engine = ? AND created >= ? AND status = ?', $e, $todayStart, 'failed'));
+                $al = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('engine = ?', $e));
+                $as = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('engine = ? AND status = ?', $e, 'success'));
+                $byEngine[$e] = [
+                    'today' => (int) $t['c'], 'today_success' => (int) $ts['c'], 'today_failed' => (int) $tf['c'],
+                    'total' => (int) $al['c'], 'total_success' => (int) $as['c'],
+                ];
+            }
+            /* 总体（所有引擎） */
+            $gToday = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('created >= ?', $todayStart));
+            $gTodaySuccess = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('created >= ? AND status = ?', $todayStart, 'success'));
+            $gTodayFailed = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('created >= ? AND status = ?', $todayStart, 'failed'));
+            $gTotal = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table));
+            $gTotalSuccess = $db->fetchRow($db->select(['COUNT(id)' => 'c'])->from($table)->where('status = ?', 'success'));
+            /* 近 7 天趋势（按天+引擎，成功数） */
+            $trend = [];
+            $buckets = [];
+            $trendRows = $db->fetchAll($db->select('engine', 'created')->from($table)->where('created >= ? AND status = ?', $todayStart - 6 * 86400, 'success'));
+            foreach ($trendRows as $r) {
+                $d = date('m-d', (int) $r['created']);
+                $e = $r['engine'] ?: 'baidu';
+                if (!isset($buckets[$d])) $buckets[$d] = ['baidu' => 0, 'indexnow' => 0, 'other' => 0];
+                if (!isset($buckets[$d][$e])) $buckets[$d][$e] = 0;
+                $buckets[$d][$e]++;
+            }
+            for ($i = 6; $i >= 0; $i--) {
+                $d = date('m-d', $todayStart - $i * 86400);
+                $trend[$d] = isset($buckets[$d]) ? $buckets[$d] : ['baidu' => 0, 'indexnow' => 0, 'other' => 0];
+            }
+            /* 失败明细（含引擎名） */
+            $failedRows = $db->fetchAll($db->select('url', 'engine', 'message', 'created')->from($table)->where('status = ?', 'failed')->order('id', \Typecho\Db::SORT_DESC)->limit(50));
 
             return [
-                'today' => (int) $today['c'],
-                'today_success' => (int) $todaySuccess['c'],
-                'today_failed' => (int) $todayFailed['c'],
-                'total' => (int) $total['c'],
-                'total_success' => (int) $totalSuccess['c'],
+                'today' => (int) $gToday['c'],
+                'today_success' => (int) $gTodaySuccess['c'],
+                'today_failed' => (int) $gTodayFailed['c'],
+                'total' => (int) $gTotal['c'],
+                'total_success' => (int) $gTotalSuccess['c'],
+                'by_engine' => $byEngine,
+                'trend' => $trend,
                 'failed_list' => $failedRows,
             ];
         } catch (\Throwable $e) {
-            return ['today' => 0, 'today_success' => 0, 'today_failed' => 0, 'total' => 0, 'total_success' => 0, 'failed_list' => []];
+            return ['today' => 0, 'today_success' => 0, 'today_failed' => 0, 'total' => 0, 'total_success' => 0, 'by_engine' => [], 'trend' => [], 'failed_list' => []];
         }
     }
 
@@ -831,7 +940,7 @@ JS;
             return;
         }
         $siteUrl = rtrim(\Typecho\Widget::widget('Widget_Options')->siteUrl, '/');
-        $url = $siteUrl . '/usr/plugins/BaiduPush/push.php?mode=' . $mode . '&key=' . urlencode(self::internalKey());
+        $url = $siteUrl . '/usr/plugins/StellarPush/push.php?mode=' . $mode . '&key=' . urlencode(self::internalKey());
         $parts = parse_url($url);
         $host = $parts['host'] ?? '127.0.0.1';
         /* 回环直连一律走 HTTP：HTTPS 站 443 只监听 TLS，明文连不上；显式非 443 端口（本地测试）保留 */
