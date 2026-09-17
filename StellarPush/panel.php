@@ -49,7 +49,15 @@ if ($action === 'push' && $engine === 'baidu') {
     $collected = $bp::collectUrls($bp_site);
     $all = array_merge($collected['posts'], $collected['static']);
     $n2 = $bp::indexNow($all);
-    $result = ['ok' => $r1['ok'] || $n2 > 0, 'pushed' => $r1['pushed'] + $n2, 'failed' => $r1['failed'], 'remain' => $r1['remain'], 'detail' => []];
+    $result = [
+        'ok' => $r1['ok'] || $n2 > 0,
+        'pushed' => $r1['pushed'] + $n2, 'failed' => $r1['failed'], 'remain' => $r1['remain'], 'detail' => [],
+        /* 分引擎结果（消息里逐引擎显示成功/失败） */
+        'engine_results' => [
+            '百度' => ['pushed' => $r1['pushed'], 'failed' => $r1['failed'], 'remain' => $r1['remain']],
+            'IndexNow' => ['pushed' => $n2, 'failed' => 0, 'remain' => '-'],
+        ],
+    ];
 } elseif ($action === 'full') {
     $result = $bp::push('full', false);
 } elseif ($action === 'dry') {
@@ -97,10 +105,11 @@ $failedList = $stats['failed_list'] ?? [];
 
 /* 引擎状态定义 */
 $engines = [
-    'baidu' => ['name' => '百度', 'icon' => '🔍', 'color' => '#5b5bd6', 'desc' => '百度站长平台 API 主动推送', 'configured' => trim($bp::opt('bp_token', '')) !== ''],
-    'indexnow' => ['name' => 'Bing / IndexNow', 'icon' => '🅱', 'color' => '#0ea5e9', 'desc' => 'Bing/Yandex 等一键推送（零配置）', 'configured' => true],
-    '360' => ['name' => '360 搜索', 'icon' => '🛡', 'color' => '#f59e0b', 'desc' => '待接入（站长平台 token）', 'configured' => false],
-    'toutiao' => ['name' => '头条搜索', 'icon' => '📰', 'color' => '#ef4444', 'desc' => '待接入（站长平台 token）', 'configured' => false],
+    'baidu' => ['name' => '百度', 'icon' => '🔍', 'color' => '#5b5bd6', 'desc' => '百度站长平台 API 主动推送', 'configured' => trim($bp::opt('bp_token', '')) !== '', 'mode' => 'api'],
+    'indexnow' => ['name' => 'Bing / IndexNow', 'icon' => '🅱', 'color' => '#0ea5e9', 'desc' => 'Bing/Yandex API 推送（密钥可自填，留空自动生成）', 'configured' => true, 'mode' => 'api'],
+    'shenma' => ['name' => '神马', 'icon' => '📱', 'color' => '#10b981', 'desc' => '神马（移动端/夸克）token 记录，去平台提交 sitemap', 'configured' => trim($bp::opt('sm_token', '')) !== '', 'mode' => 'manual'],
+    '360' => ['name' => '360 搜索', 'icon' => '🛡', 'color' => '#f59e0b', 'desc' => '360 自动收录 JS（站长平台复制后粘贴设置）', 'configured' => trim($bp::opt('so_js', '')) !== '', 'mode' => 'js'],
+    'toutiao' => ['name' => '头条搜索', 'icon' => '📰', 'color' => '#ef4444', 'desc' => '头条自动收录 JS（站长平台复制后粘贴设置）', 'configured' => trim($bp::opt('tt_js', '')) !== '', 'mode' => 'js'],
 ];
 
 /* 最近日志 */
@@ -220,14 +229,15 @@ code { background:var(--bg); padding:1px 6px; border-radius:4px; font-size:12px;
       <div class="helper">
         <b style="color:var(--ink);">接入流程</b>
         <ul style="margin:8px 0;padding-left:18px;">
-          <li><b>百度</b>：站长平台 ziyuan.baidu.com → 普通收录 → 推送接口，复制 token 填到插件设置。</li>
-          <li><b>IndexNow</b>（Bing/Yandex 等）：<b>零配置自动启用</b>，插件自动生成密钥并托管 key.txt。</li>
-          <li><b>360 / 头条</b>：暂未接入，后续版本开放。</li>
+          <li><b>百度</b>：站长平台 ziyuan.baidu.com → 普通收录 → 推送接口，复制 token 填到插件设置（<code>bp_token</code>），即可 API 主动推送。</li>
+          <li><b>IndexNow</b>（Bing/Yandex 等）：默认零配置自动启用；也可在插件设置 <code>idx_key</code> 填自己的密钥（留空自动生成并托管 key.txt）。</li>
+          <li><b>神马</b>：插件设置 <code>sm_token</code> 填神马站长平台 token（记录后去该平台提交 sitemap，无服务器 API）。</li>
+          <li><b>360 / 头条</b>：无官方 API 推送 → 各自站长平台「自动收录」里复制 JS 代码，粘到插件设置 <code>so_js</code> / <code>tt_js</code>，插件自动注入前台触发抓取。</li>
         </ul>
         <b style="color:var(--ink);">使用</b>
         <ul style="margin:8px 0;padding-left:18px;">
-          <li>「🚀 全部推送」= 同时推百度 + IndexNow。</li>
-          <li>每张引擎卡有「单独推送」按钮，可单独测某个引擎。</li>
+          <li>「🚀 全部推送」= 推所有已配置的 API 引擎（百度 + IndexNow）。</li>
+          <li>API 引擎卡有「单独推送」；360/头条是浏览页面时由 JS 自动收录，无需点推送。</li>
           <li>增量模式只推未推过的 URL，避免浪费百度配额。</li>
         </ul>
       </div>
@@ -242,7 +252,11 @@ code { background:var(--bg); padding:1px 6px; border-radius:4px; font-size:12px;
     <?php elseif ($action === 'dry'): ?>
       干跑完成：共 <?php echo count($dryUrls ?: []); ?> 个 URL 待推送（未真正推送）
     <?php elseif ($action === 'all'): ?>
-      全部推送完成：<b>成功 <?php echo (int)$result['pushed']; ?></b> 条，失败 <?php echo (int)$result['failed']; ?> 条（百度 + IndexNow）
+      全部推送完成：<br>
+      <?php foreach (($result['engine_results'] ?? []) as $ename => $er): ?>
+        · <b><?php echo $ename; ?></b>：成功 <b style="color:var(--ok);"><?php echo (int)$er['pushed']; ?></b> 条，
+        失败 <b style="color:<?php echo $er['failed'] > 0 ? 'var(--err)' : 'var(--ok)'; ?>;"><?php echo (int)$er['failed']; ?></b> 条<?php if ($er['remain'] !== '-'): ?>（剩余配额 <?php echo (int)$er['remain']; ?>）<?php endif; ?><br>
+      <?php endforeach; ?>
     <?php else: ?>
       推送完成：成功 <?php echo (int)$result['pushed']; ?> 条，失败 <?php echo (int)$result['failed']; ?> 条
       <?php if (isset($result['remain'])): ?>，剩余配额 <?php echo (int)$result['remain']; ?><?php endif; ?>
@@ -306,10 +320,24 @@ code { background:var(--bg); padding:1px 6px; border-radius:4px; font-size:12px;
           <span>失败 <b style="color:var(--err);"><?php echo (int)$st['today_failed']; ?></b></span>
           <span>累计 <b><?php echo (int)$st['total']; ?></b></span>
         </div>
-        <?php if ($e['configured']): ?>
-          <a class="btn btn-ghost" style="padding:5px 14px;font-size:13px;" href="panel.php?action=push&engine=<?php echo $key; ?>">▶ 单独推送</a>
+        <?php if ($e['mode'] === 'api'): ?>
+          <?php if ($e['configured']): ?>
+            <a class="btn btn-ghost" style="padding:5px 14px;font-size:13px;" href="panel.php?action=push&engine=<?php echo $key; ?>">▶ 单独推送</a>
+          <?php else: ?>
+            <span class="hint">去「插件设置」填 token 后可推送</span>
+          <?php endif; ?>
+        <?php elseif ($e['mode'] === 'js'): ?>
+          <?php if ($e['configured']): ?>
+            <span class="badge badge-ok" style="font-size:12px;">✅ 自动收录 JS 已注入前台</span>
+          <?php else: ?>
+            <span class="hint">去「插件设置」粘贴自动收录 JS</span>
+          <?php endif; ?>
         <?php else: ?>
-          <span class="hint">待接入，无操作</span>
+          <?php if ($e['configured']): ?>
+            <span class="hint">✅ token 已记录（去神马平台提交 sitemap）</span>
+          <?php else: ?>
+            <span class="hint">去「插件设置」填 token</span>
+          <?php endif; ?>
         <?php endif; ?>
       </div>
     <?php endforeach; ?>

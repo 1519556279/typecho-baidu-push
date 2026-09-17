@@ -41,6 +41,8 @@ class Plugin implements PluginInterface
         }
         /* 前台渲染钩子：触发每日定时自动推送 */
         \Typecho\Plugin::factory('Widget_Archive')->beforeRender = __CLASS__ . '::onRender';
+        /* 前台 footer：注入 360/头条 自动收录 JS（可选） */
+        \Typecho\Plugin::factory('Widget_Archive')->footer = __CLASS__ . '::renderFooter';
         /* 发布/更新钩子：新文章发布即实时推送（fire-and-forget） */
         \Typecho\Plugin::factory('Widget_Contents_Post_Edit')->finishPublish = __CLASS__ . '::onPublish';
         \Typecho\Plugin::factory('Widget_Contents_Post_Edit')->finishSave = __CLASS__ . '::onUpdate';
@@ -86,6 +88,17 @@ class Plugin implements PluginInterface
 JS;
         echo $js;
                 return;
+            }
+        }
+    }
+
+    /* 前台 footer：注入 360/头条 自动收录 JS（在插件设置里粘贴后生效） */
+    public static function renderFooter(): void
+    {
+        foreach (['so_js', 'tt_js'] as $k) {
+            $code = trim(self::opt($k, ''));
+            if ($code !== '') {
+                echo $code . "\n";
             }
         }
     }
@@ -175,6 +188,34 @@ JS;
             _t('用于外部计划任务 curl 触发 push.php 时的鉴权，留空则 push.php 拒绝外部访问')
         );
         $form->addInput($key);
+
+        $idx = new \Typecho\Widget\Helper\Form\Element\Text(
+            'idx_key', null, '',
+            _t('IndexNow 密钥（可选）'),
+            _t('必应/IndexNow 推送密钥（Bing/Yandex 等）。留空自动生成并托管 {key}.txt；也可在必应站长平台生成后填到这里')
+        );
+        $form->addInput($idx);
+
+        $sm = new \Typecho\Widget\Helper\Form\Element\Text(
+            'sm_token', null, '',
+            _t('神马搜索 Token（可选）'),
+            _t('神马站长平台（移动端/夸克）token。留空不推送神马；填了会在面板显示已配置，并可在该平台提交 sitemap')
+        );
+        $form->addInput($sm);
+
+        $soJs = new \Typecho\Widget\Helper\Form\Element\Textarea(
+            'so_js', null, '',
+            _t('360 自动收录 JS 代码（可选）'),
+            _t('360 站长平台 → 自动收录 复制的 JS 代码，粘贴后前台自动注入。360 无官方 API 推送，用 JS 触发抓取')
+        );
+        $form->addInput($soJs);
+
+        $ttJs = new \Typecho\Widget\Helper\Form\Element\Textarea(
+            'tt_js', null, '',
+            _t('头条自动收录 JS 代码（可选）'),
+            _t('头条站长平台 → 自动收录 复制的 JS 代码，粘贴后前台自动注入。头条无官方 API 推送，用 JS 触发抓取')
+        );
+        $form->addInput($ttJs);
     }
 
     public static function personalConfig(Form $form)
@@ -690,7 +731,11 @@ JS;
         if (!$host) {
             return 0;
         }
-        $key = self::state('indexnow_key', '');
+        /* 密钥：优先用插件设置里填的 idx_key（通用可配置），留空则用自动生成的 indexnow_key */
+        $key = trim(self::opt('idx_key', ''));
+        if ($key === '') {
+            $key = self::state('indexnow_key', '');
+        }
         if ($key === '') {
             /* 惰性生成密钥（首次推送时自动生成，无需重新激活插件） */
             try {
