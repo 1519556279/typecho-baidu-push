@@ -258,8 +258,13 @@ code { background:var(--bg); padding:1px 6px; border-radius:4px; font-size:12px;
         失败 <b style="color:<?php echo $er['failed'] > 0 ? 'var(--err)' : 'var(--ok)'; ?>;"><?php echo (int)$er['failed']; ?></b> 条<?php if ($er['remain'] !== '-'): ?>（剩余配额 <?php echo (int)$er['remain']; ?>）<?php endif; ?><br>
       <?php endforeach; ?>
     <?php else: ?>
-      推送完成：成功 <?php echo (int)$result['pushed']; ?> 条，失败 <?php echo (int)$result['failed']; ?> 条
-      <?php if (isset($result['remain'])): ?>，剩余配额 <?php echo (int)$result['remain']; ?><?php endif; ?>
+      <?php if ((int)($result['pushed'] ?? 0) === 0 && (int)($result['failed'] ?? 0) === 0 && empty($result['detail'] ?? [])): ?>
+        💡 本次<b>没有新链接可推送</b>：全站 URL 已全部推送过（增量模式只推新增/未推过的页面）。发布新文章后点这里就会推送新页面。
+        <?php if (isset($result['remain'])): ?>（百度剩余配额 <?php echo (int)$result['remain']; ?>）<?php endif; ?>
+      <?php else: ?>
+        推送完成：成功 <?php echo (int)$result['pushed']; ?> 条，失败 <?php echo (int)$result['failed']; ?> 条
+        <?php if (isset($result['remain'])): ?>，剩余配额 <?php echo (int)$result['remain']; ?><?php endif; ?>
+      <?php endif; ?>
     <?php endif; ?>
   </div>
 <?php endif; ?>
